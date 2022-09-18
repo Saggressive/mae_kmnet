@@ -1,0 +1,29 @@
+{
+    // 使用 IntelliSense 了解相关属性。 
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "main pretrain",
+            "type": "python",
+            "request": "launch",
+            "program": "/nlp_group/wuxing/suzhenpeng/mae_resnet/main_pretrain.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--batch_size", "16" ,
+                "--model", "mae_vit_base_patch16" ,
+                "--mask_ratio", "0.75" ,
+                "--epochs", "800" ,
+                "--output_dir", "output_dir/debug" ,
+                "--log_dir" , "output_dir/debug" ,
+                "--warmup_epochs","40" ,
+                "--blr", "1.5e-4", "--weight_decay", "0.05", 
+                "--norm_pix_loss" ,
+                "--data_path", "/nlp_group/wuxing/suzhenpeng/mae_resnet/imagenet" 
+            ],
+            "justMyCode": true,
+
+        }
+    ]
+}
