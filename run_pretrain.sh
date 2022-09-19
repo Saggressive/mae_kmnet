@@ -4,7 +4,7 @@ export NCCL_IB_GID_INDEX=3
 export NCCL_SOCKET_IFNAME=eth
 export NCCL_IB_HCA=mlx5
 node_rank=$1
-name=resnet_pretrain_100_beta1_resdd2_pixel_mid9
+name=resnet_pretrain_100_beta1_conv_pixel_mid6
 all_dir=/nlp_group/wuxing/suzhenpeng/mae_resnet/output_dir/${name}
 mkdir ${all_dir}
 nohup python -m torch.distributed.launch --nnodes=4 --master_addr=10.116.150.13  --node_rank=${node_rank}  --nproc_per_node=8   --master_port 3243  \

@@ -17,7 +17,7 @@ import torch.nn as nn
 from timm.models.vision_transformer import PatchEmbed, Block
 
 from util.pos_embed import get_2d_sincos_pos_embed
-from resnet import resnet101,resnet50
+from resnet_conv import resnet101,resnet50
 
 
 
@@ -62,6 +62,10 @@ class MaskedAutoencoderViT(nn.Module):
         self.decoder_blocks_resnet = nn.ModuleList([
             Block(decoder_embed_dim, decoder_num_heads, mlp_ratio, qkv_bias=True, qk_scale=None, norm_layer=norm_layer)
             for i in range(2)])
+        self.decoder_cnn=nn.Conv2d(512, 2048, (2,2),stride=2)
+        self.relu = nn.ReLU(inplace=True)
+        self.bn_norm_layer = nn.BatchNorm2d(2048)
+        self.bn_norm_layer_target = nn.BatchNorm2d(2048)
 
         self.decoder_norm = norm_layer(decoder_embed_dim)
         self.decoder_pred = nn.Linear(decoder_embed_dim, patch_size**2 * in_chans, bias=True) # decoder to patch
@@ -177,7 +181,7 @@ class MaskedAutoencoderViT(nn.Module):
         # apply Transformer blocks
         for blk_i,blk in enumerate(self.blocks):
             x = blk(x)
-            if blk_i==8:
+            if blk_i==5:
                 middle_x=x.clone()
         x = self.norm(x)
         middle_x = self.middle_norm(middle_x)
@@ -200,16 +204,15 @@ class MaskedAutoencoderViT(nn.Module):
 
     def forward_decoder_r(self,x):
         # apply Transformer blocks
-        for blk in self.decoder_blocks_resnet:
-            x = blk(x)
-        x = self.decoder_norm_resnet(x)
-
-        # predictor projection
-        x = self.decoder_pred_resnet(x)
-
-        # remove cls token
         x = x[:, 1:, :]
-
+        n,l,d=x.size()
+        x=x.permute(0,2,1)
+        patch_num=int(l**(1/2))
+        x=x.reshape(n,d,patch_num,patch_num)
+        x=self.decoder_cnn(x)
+        x=self.bn_norm_layer(x)
+        n,c,w,h=x.size()
+        x=x.reshape(n,c,w*h)
         return x
 
     def forward_decoder(self, x, m_x,ids_restore):
@@ -255,37 +258,30 @@ class MaskedAutoencoderViT(nn.Module):
         loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
         return loss
 
-    def forward_loss_r(self, target, pred, mask):
+    def forward_loss_r(self, target, pred):
         """
         imgs: [N, 3, H, W]
         pred: [N, L, p*p*3]
         mask: [N, L], 0 is keep, 1 is remove, 
         """
-        n,l,d=target.size()
-        target=target.reshape(n,-1)
-        mean=target.mean(dim=0,keepdim=True)
-        var = target.var(dim=0, keepdim=True)
-        target = (target - mean) / (var + 1.e-6)**.5
-        target=target.reshape(n,l,d)
 
         loss = (pred - target) ** 2
-        loss = loss.mean(dim=-1)  # [N, L], mean loss per patch
+        loss = loss.mean()  # [N, L], mean loss per patch
 
-        loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
         return loss
 
     def forward(self, imgs, mask_ratio=0.75):
         with torch.no_grad():
             resnet_latent=self.resnet50(imgs)
             resnet_latent=resnet_latent.detach()
-            resnet_latent=resnet_latent.permute(0,2,3,1)
-            n,w,h,d=resnet_latent.size()
-            resnet_latent=resnet_latent.reshape(shape=(-1,w*h,d))
+        n,c,w,h=resnet_latent.size()
+        resnet_latent=self.bn_norm_layer_target(resnet_latent)
+        resnet_latent=resnet_latent.reshape(shape=(-1,c,w*h))
 
         latent,m_latent, mask, ids_restore = self.forward_encoder(imgs, mask_ratio)
         pred_t,pred_r = self.forward_decoder(latent,m_latent, ids_restore)  # [N, L, p*p*3]
         t_loss = self.forward_loss_t(imgs, pred_t, mask)
-        r_loss = self.forward_loss_r(resnet_latent, pred_r, mask)
+        r_loss = self.forward_loss_r(resnet_latent, pred_r)
         loss = t_loss + r_loss
         return loss, t_loss , r_loss
 
