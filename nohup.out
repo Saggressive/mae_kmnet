@@ -10,3 +10,15 @@ Killing subprocess 101868
 Killing subprocess 101869
 Killing subprocess 101871
 Main process received SIGINT, exiting
+*****************************************
+Setting OMP_NUM_THREADS environment variable for each process to be 1 in default, to avoid your system being overloaded, please further tune the variable for optimal performance in your application as needed. 
+*****************************************
+Killing subprocess 16846
+Killing subprocess 16847
+Killing subprocess 16848
+Killing subprocess 16849
+Killing subprocess 16850
+Killing subprocess 16852
+Killing subprocess 16854
+Killing subprocess 16856
+Main process received SIGINT, exiting
