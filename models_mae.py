@@ -177,7 +177,7 @@ class MaskedAutoencoderViT(nn.Module):
         # apply Transformer blocks
         for blk_i,blk in enumerate(self.blocks):
             x = blk(x)
-            if blk_i==8:
+            if blk_i==5:
                 middle_x=x.clone()
         x = self.norm(x)
         middle_x = self.middle_norm(middle_x)
