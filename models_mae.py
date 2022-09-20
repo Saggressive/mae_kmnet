@@ -57,14 +57,14 @@ class MaskedAutoencoderViT(nn.Module):
 
         self.decoder_blocks = nn.ModuleList([
             Block(decoder_embed_dim, decoder_num_heads, mlp_ratio, qkv_bias=True, qk_scale=None, norm_layer=norm_layer)
-            for i in range(decoder_depth)])
+            for i in range(2)])
 
         self.decoder_blocks_resnet = nn.ModuleList([
             Block(decoder_embed_dim, decoder_num_heads, mlp_ratio, qkv_bias=True, qk_scale=None, norm_layer=norm_layer)
             for i in range(2)])
 
         self.decoder_norm = norm_layer(decoder_embed_dim)
-        self.decoder_pred = nn.Linear(decoder_embed_dim, patch_size**2 * in_chans, bias=True) # decoder to patch
+        self.decoder_pred = nn.Linear(decoder_embed_dim,1024, bias=True) # decoder to patch
         self.decoder_norm_resnet = norm_layer(decoder_embed_dim)
         self.decoder_pred_resnet = nn.Linear(decoder_embed_dim, 1024, bias=True)
         # --------------------------------------------------------------------------
@@ -178,7 +178,10 @@ class MaskedAutoencoderViT(nn.Module):
         for blk_i,blk in enumerate(self.blocks):
             x = blk(x)
             if blk_i==5:
-                middle_x=x.clone()
+                h_early=x[:,1:,:].clone()
+
+        cls_late=x[:,:1,:].clone()
+        middle_x=torch.cat([cls_late,h_early],dim=1)
         x = self.norm(x)
         middle_x = self.middle_norm(middle_x)
         return x, middle_x,mask, ids_restore
@@ -274,6 +277,29 @@ class MaskedAutoencoderViT(nn.Module):
         loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
         return loss
 
+    def forward_loss_t_r(self, target, pred1, pred2,mask):
+        """
+        imgs: [N, 3, H, W]
+        pred: [N, L, p*p*3]
+        mask: [N, L], 0 is keep, 1 is remove, 
+        """
+        n,l,d=target.size()
+        target=target.reshape(n,-1)
+        mean=target.mean(dim=0,keepdim=True)
+        var = target.var(dim=0, keepdim=True)
+        target = (target - mean) / (var + 1.e-6)**.5
+        target=target.reshape(n,l,d)
+
+        loss1 = (pred1 - target) ** 2
+        loss1 = loss1.mean(dim=-1)  # [N, L], mean loss per patch
+        loss1 = (loss1 * mask).sum() / mask.sum()  # mean loss on removed patches
+
+        loss2 = (pred2 - target) ** 2
+        loss2 = loss2.mean(dim=-1)  # [N, L], mean loss per patch
+        loss2 = (loss2 * mask).sum() / mask.sum()  # mean loss on removed patches
+
+        return loss1,loss2
+
     def forward(self, imgs, mask_ratio=0.75):
         with torch.no_grad():
             resnet_latent=self.resnet50(imgs)
@@ -284,8 +310,7 @@ class MaskedAutoencoderViT(nn.Module):
 
         latent,m_latent, mask, ids_restore = self.forward_encoder(imgs, mask_ratio)
         pred_t,pred_r = self.forward_decoder(latent,m_latent, ids_restore)  # [N, L, p*p*3]
-        t_loss = self.forward_loss_t(imgs, pred_t, mask)
-        r_loss = self.forward_loss_r(resnet_latent, pred_r, mask)
+        t_loss,r_loss = self.forward_loss_t_r(resnet_latent, pred_r,pred_t, mask)
         loss = t_loss + r_loss
         return loss, t_loss , r_loss
 
