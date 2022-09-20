@@ -5,18 +5,18 @@ export NCCL_SOCKET_IFNAME=eth
 export NCCL_IB_HCA=mlx5
 
 node_rank=$1
-name=pretrain100_mid6_midres
+name=debug
 all_dir=/nlp_group/wuxing/suzhenpeng/mae_resnet/output_dir/${name}
 mkdir ${all_dir}
 
 
-nohup python -m torch.distributed.launch --nnodes=2 --master_addr=10.116.146.141  --node_rank=${node_rank}  --nproc_per_node=8   --master_port 23332  \
+nohup python -m torch.distributed.launch --nnodes=4 --master_addr=10.116.146.14  --node_rank=${node_rank}  --nproc_per_node=8   --master_port 23332  \
     --use_env main_finetune.py  \
-    --finetune output_dir/resnet_pretrain_100_beta1_resdd2_pixel_mid6_midres/checkpoint-99.pth \
+    --finetune output_dir/resnet_pretrain_800_beta1_resdd2_onlyres50/checkpoint-20.pth \
     --output_dir ${all_dir} \
     --log_dir ${all_dir} \
     --accum_iter 1 \
-    --batch_size 64 \
+    --batch_size 32 \
     --model vit_base_patch16 \
     --epochs 100 \
     --blr 5e-4 --layer_decay 0.65 \
