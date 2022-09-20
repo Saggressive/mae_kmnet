@@ -240,7 +240,7 @@ class ResNet(nn.Module):
         x,_ = self.layer1(x)
         x,_ = self.layer2(x)
         x,layers_x = self.layer3(x)
-        return layers_x
+        return x,layers_x
         # x = self.layer4(x)
 
         # x = self.avgpool(x)

@@ -34,7 +34,7 @@ import models_mae
 
 from engine_pretrain import train_one_epoch
 import os
-# os.environ['CUDA_VISIBLE_DEVICES']="1"
+os.environ['CUDA_VISIBLE_DEVICES']="1"
 
 def get_args_parser():
     parser = argparse.ArgumentParser('MAE pre-training', add_help=False)

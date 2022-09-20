@@ -19,7 +19,29 @@ from timm.models.vision_transformer import PatchEmbed, Block
 from util.pos_embed import get_2d_sincos_pos_embed
 from resnet import resnet101,resnet50
 
+class PCA:
+    def __init__(self,output_dim) -> None:
+        self.output_dim = output_dim
+    
+    def fit(self,X_data):
+        N = len(X_data)
+        H = torch.eye(n=N)-1/N*(torch.matmul(torch.ones(size=(N,1)),torch.ones(size=(1,N))))
+        H=H.to(X_data.device)
+        X_data = torch.matmul(H,X_data)
+        X_data=X_data.float()
+        _,_,v = torch.svd(X_data)
+        self.base = v[:,:self.output_dim]
 
+    def fit_transform(self,X_data):
+        X_data=X_data.float()
+        self.fit(X_data)
+        return self.transform(X_data)
+
+    def transform(self,X_data):
+        return torch.matmul(X_data,self.base)
+
+    def inverse_transform(self,X_data):
+        return torch.matmul(X_data,self.base.T)
 
 class MaskedAutoencoderViT(nn.Module):
     """ Masked Autoencoder with VisionTransformer backbone
@@ -66,12 +88,12 @@ class MaskedAutoencoderViT(nn.Module):
         self.decoder_norm = norm_layer(decoder_embed_dim)
         self.decoder_pred = nn.Linear(decoder_embed_dim, patch_size**2 * in_chans, bias=True) # decoder to patch
         self.decoder_norm_resnet = norm_layer(decoder_embed_dim)
-        self.decoder_pred_resnet = nn.Linear(decoder_embed_dim, 1024, bias=True)
+        self.decoder_pred_resnet = nn.Linear(decoder_embed_dim, 512, bias=True)
         # --------------------------------------------------------------------------
     
         self.norm_pix_loss = norm_pix_loss
-        # self.resnet50=resnet50(pretrained=True)
-        self.resnet101=resnet101(pretrained=True)
+        self.resnet50=resnet50(pretrained=True)
+        # self.resnet101=resnet101(pretrained=True)
         self.initialize_weights()
 
     def initialize_weights(self):
@@ -247,18 +269,17 @@ class MaskedAutoencoderViT(nn.Module):
         loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
         return loss
 
-    def forward_loss_r(self, target, pred, mask):
+    def forward_loss_r(self, target, pred, mask, pca):
         """
         imgs: [N, 3, H, W]
         pred: [N, L, p*p*3]
         mask: [N, L], 0 is keep, 1 is remove, 
         """
         n,l,d=target.size()
-        target=target.reshape(n,-1)
-        mean=target.mean(dim=0,keepdim=True)
-        var = target.var(dim=0, keepdim=True)
-        target = (target - mean) / (var + 1.e-6)**.5
-        target=target.reshape(n,l,d)
+        target=target.reshape(n*l,-1)
+        target = pca.fit_transform(target)
+        target = target.reshape(n,l,d//2)
+        target = target.half()
 
         loss = (pred - target) ** 2
         loss = loss.mean(dim=-1)  # [N, L], mean loss per patch
@@ -268,7 +289,8 @@ class MaskedAutoencoderViT(nn.Module):
 
     def forward(self, imgs, mask_ratio=0.75):
         with torch.no_grad():
-            resnet_latent=self.resnet101(imgs)
+            # resnet_latent,_=self.resnet101(imgs)
+            resnet_latent,_=self.resnet50(imgs)
             resnet_latent=resnet_latent.detach()
             resnet_latent=resnet_latent.permute(0,2,3,1)
             n,w,h,d=resnet_latent.size()
@@ -277,7 +299,8 @@ class MaskedAutoencoderViT(nn.Module):
         latent,mask, ids_restore = self.forward_encoder(imgs, mask_ratio)
         pred_r = self.forward_decoder(latent,ids_restore)  # [N, L, p*p*3]
 
-        r_loss = self.forward_loss_r(resnet_latent, pred_r, mask)
+        pca = PCA(512)
+        r_loss = self.forward_loss_r(resnet_latent, pred_r, mask,pca)
 
         return  r_loss
 
