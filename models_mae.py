@@ -63,9 +63,9 @@ class MaskedAutoencoderViT(nn.Module):
             Block(decoder_embed_dim, decoder_num_heads, mlp_ratio, qkv_bias=True, qk_scale=None, norm_layer=norm_layer)
             for i in range(2)])
 
-        self.decoder_norm = norm_layer(decoder_embed_dim)
+        self.decoder_norm = nn.BatchNorm2d(decoder_embed_dim)
         self.decoder_pred = nn.Linear(decoder_embed_dim,1024, bias=True) # decoder to patch
-        self.decoder_norm_resnet = norm_layer(decoder_embed_dim)
+        self.decoder_norm_resnet = nn.BatchNorm2d(decoder_embed_dim)
         self.decoder_pred_resnet = nn.Linear(decoder_embed_dim, 1024, bias=True)
         # --------------------------------------------------------------------------
     
@@ -191,8 +191,16 @@ class MaskedAutoencoderViT(nn.Module):
         # apply Transformer blocks
         for blk in self.decoder_blocks:
             x = blk(x)
-        x = self.decoder_norm(x)
 
+        cls_x,x=x[:,:1,:],x[:,1:,:]
+        x=x.permute(0,2,1)
+        n,c,l=x.size()
+        w=int(self.patch_embed.num_patches**.5)
+        x=x.reshape(n,c,w,w)
+        x = self.decoder_norm(x)
+        x=x.reshape(n,c,l)
+        x=x.permute(0,2,1)
+        x=torch.cat([cls_x,x],dim=1)
         # predictor projection
         x = self.decoder_pred(x)
 
@@ -205,8 +213,16 @@ class MaskedAutoencoderViT(nn.Module):
         # apply Transformer blocks
         for blk in self.decoder_blocks_resnet:
             x = blk(x)
-        x = self.decoder_norm_resnet(x)
 
+        cls_x,x=x[:,:1,:],x[:,1:,:]
+        x=x.permute(0,2,1)
+        n,c,l=x.size()
+        w=int(self.patch_embed.num_patches**.5)
+        x=x.reshape(n,c,w,w)
+        x = self.decoder_norm_resnet(x)
+        x=x.reshape(n,c,l)
+        x=x.permute(0,2,1)
+        x=torch.cat([cls_x,x],dim=1)
         # predictor projection
         x = self.decoder_pred_resnet(x)
 
@@ -284,11 +300,11 @@ class MaskedAutoencoderViT(nn.Module):
         mask: [N, L], 0 is keep, 1 is remove, 
         """
         n,l,d=target.size()
-        target=target.reshape(n,-1)
-        mean=target.mean(dim=0,keepdim=True)
-        var = target.var(dim=0, keepdim=True)
+        target=target.permute(0,2,1)
+        mean=target.mean(dim=-1,keepdim=True)
+        var = target.var(dim=-1, keepdim=True)
         target = (target - mean) / (var + 1.e-6)**.5
-        target=target.reshape(n,l,d)
+        target=target.permute(0,2,1)
 
         loss1 = (pred1 - target) ** 2
         loss1 = loss1.mean(dim=-1)  # [N, L], mean loss per patch
