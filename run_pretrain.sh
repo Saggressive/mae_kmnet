@@ -4,10 +4,10 @@ export NCCL_IB_GID_INDEX=3
 export NCCL_SOCKET_IFNAME=eth
 export NCCL_IB_HCA=mlx5
 node_rank=$1
-name=resnet_pretrain_100_beta1_resdd2_res50_condenser
+name=resnet_pretrain_100_beta1_resdd2_res50_cder_cmae
 all_dir=/nlp_group/wuxing/suzhenpeng/mae_resnet/output_dir/${name}
 mkdir ${all_dir}
-nohup python -m torch.distributed.launch --nnodes=4 --master_addr=10.116.146.14  --node_rank=${node_rank}  --nproc_per_node=8   --master_port 3243  \
+nohup python -m torch.distributed.launch --nnodes=4 --master_addr=10.116.150.143  --node_rank=${node_rank}  --nproc_per_node=8   --master_port 3243  \
     --use_env main_pretrain.py \
     --batch_size 128 \
     --model mae_vit_base_patch16 \

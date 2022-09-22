@@ -31,7 +31,7 @@ import util.misc as misc
 from util.misc import NativeScalerWithGradNormCount as NativeScaler
 
 import models_mae
-
+from Imagenet_Dataset import Imagenet_Dataset
 from engine_pretrain import train_one_epoch
 import os
 # os.environ['CUDA_VISIBLE_DEVICES']="1"
@@ -126,9 +126,10 @@ def main(args):
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
-    dataset_train = datasets.ImageFolder(os.path.join(args.data_path, 'train'), transform=transform_train)
-    print(dataset_train)
+    # dataset_train = datasets.ImageFolder(os.path.join(args.data_path, 'train'), transform=transform_train)
+    # print(dataset_train)
 
+    dataset_train = Imagenet_Dataset(os.path.join(args.data_path, 'train'), 224)
     if True:  # args.distributed:
         num_tasks = misc.get_world_size()
         global_rank = misc.get_rank()
