@@ -20,6 +20,6 @@ nohup python -m torch.distributed.launch --nnodes=4 --master_addr=10.116.150.143
     --blr 1.5e-4 --weight_decay 0.05 \
     --norm_pix_loss \
     --data_path /nlp_group/wuxing/suzhenpeng/mae_resnet/imagenet \
+    --start_epoch 21 \
+    --resume output_dir/resnet_pretrain_100_beta1_resdd2_res50_cder_cmae/checkpoint-20.pth \
     >${all_dir}/${name}_${node_rank}.log 2>&1 &
-    # --start_epoch 41 \
-    # --resume output_dir/resnet_pretrain_100_beta1_resdd2/checkpoint-40.pth \

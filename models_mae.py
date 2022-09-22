@@ -28,7 +28,7 @@ class MaskedAutoencoderViT(nn.Module):
                  embed_dim=1024, depth=24, num_heads=16,
                  decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
                  mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False,
-                 momentum=0.996,queue_size=65536,temp=1.0):
+                 momentum=0.996,queue_size=65536,temp=0.07):
         super().__init__()
 
         # --------------------------------------------------------------------------
