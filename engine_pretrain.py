@@ -45,12 +45,13 @@ def train_one_epoch(model: torch.nn.Module,
         img0 = img0.to(device, non_blocking=True)
         img1 = img1.to(device, non_blocking=True)
         with torch.cuda.amp.autocast():
-            loss, t_loss, r_loss ,cl_loss= model(img0, img1,mask_ratio=args.mask_ratio)
+            loss, t_loss, r_loss ,cl_loss, re_loss= model(img0, img1,mask_ratio=args.mask_ratio)
 
         loss_value = loss.item()
         t_loss_value=t_loss.item()
         r_loss_value=r_loss.item()
         cl_loss_value=cl_loss.item()
+        re_loss_value=re_loss.item()
         if not math.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
             sys.exit(1)
@@ -67,6 +68,7 @@ def train_one_epoch(model: torch.nn.Module,
         metric_logger.update(t_loss=t_loss_value)
         metric_logger.update(r_loss=r_loss_value)
         metric_logger.update(cl_loss=cl_loss_value)
+        metric_logger.update(re_loss=re_loss_value)
 
         lr = optimizer.param_groups[0]["lr"]
         metric_logger.update(lr=lr)
@@ -75,6 +77,7 @@ def train_one_epoch(model: torch.nn.Module,
         t_loss_value_reduce= misc.all_reduce_mean(t_loss_value)
         r_loss_value_reduce= misc.all_reduce_mean(r_loss_value)
         cl_loss_value_reduce= misc.all_reduce_mean(cl_loss_value)
+        re_loss_value_reduce= misc.all_reduce_mean(re_loss_value)
         if log_writer is not None and (data_iter_step + 1) % accum_iter == 0:
             """ We use epoch_1000x as the x-axis in tensorboard.
             This calibrates different curves when batch size changes.
@@ -84,6 +87,7 @@ def train_one_epoch(model: torch.nn.Module,
             log_writer.add_scalar('t_loss', t_loss_value_reduce, epoch_1000x)
             log_writer.add_scalar('r_loss', r_loss_value_reduce, epoch_1000x)
             log_writer.add_scalar('cl_loss', cl_loss_value_reduce, epoch_1000x)
+            log_writer.add_scalar('re_loss', re_loss_value_reduce, epoch_1000x)
             log_writer.add_scalar('lr', lr, epoch_1000x)
 
 

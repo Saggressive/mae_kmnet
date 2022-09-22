@@ -28,7 +28,7 @@ class MaskedAutoencoderViT(nn.Module):
                  embed_dim=1024, depth=24, num_heads=16,
                  decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
                  mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False,
-                 momentum=0.996,queue_size=65536,temp=1.0):
+                 momentum=0.996,queue_size=65536,temp=0.07):
         super().__init__()
 
         # --------------------------------------------------------------------------
@@ -287,9 +287,10 @@ class MaskedAutoencoderViT(nn.Module):
             x = blk(x)
 
         x = self.norm_m(x)
-        x = x[:, 1:].mean(dim=1)
-        x = self.prejector_m(x)
-        return x
+        x_copy = x.clone().detach()
+        x_mean = x_copy[:, 1:].mean(dim=1)
+        x_pjc = self.prejector_m(x_mean)
+        return x_pjc , x
 
     def forward_decoder_t(self,x):
         # apply Transformer blocks
@@ -325,11 +326,12 @@ class MaskedAutoencoderViT(nn.Module):
             x = blk(x)
         x = self.decoder_norm_features(x)
 
-        x = x[:, 1:].mean(dim=1)
-        x=self.prejector(x)
-        x=self.prediction(x)
+        x_copy=x.clone()
+        x_mean = x_copy[:, 1:].mean(dim=1)
+        x_mean=self.prejector(x_mean)
+        x_mean=self.prediction(x_mean)
 
-        return x
+        return x_mean ,x
 
     def forward_decoder(self, x, middle_x,ids_restore):
         # embed tokens
@@ -359,9 +361,9 @@ class MaskedAutoencoderViT(nn.Module):
 
         t=self.forward_decoder_t(middle_x)
         r=self.forward_decoder_r(x)
-        m=self.forward_decoder_features(feat_x)
+        m,feat=self.forward_decoder_features(feat_x)
 
-        return t,r,m
+        return t,r,m,feat
 
 
 
@@ -388,6 +390,17 @@ class MaskedAutoencoderViT(nn.Module):
 
         return loss1,loss2
 
+    def forward_loss_feat(self, pred, target):
+        """
+        imgs: [N, 3, H, W]
+        pred: [N, L, p*p*3]
+        mask: [N, L], 0 is keep, 1 is remove, 
+        """
+
+        loss = (pred - target) ** 2
+        loss = loss.mean()  # [N, L], mean loss per patch
+        return loss
+
     def contrastive_loss(self, q, k):
         with torch.no_grad():
             q=F.normalize(q,dim=1) 
@@ -407,9 +420,9 @@ class MaskedAutoencoderViT(nn.Module):
 
     def MAE(self,imgs, mask_ratio, resnet_latent):
         latent,m_latent, mask, ids_restore = self.forward_encoder(imgs, mask_ratio)
-        pred_t,pred_r,k = self.forward_decoder(latent,m_latent, ids_restore)  # [N, L, p*p*3]
+        pred_t,pred_r,k,feat = self.forward_decoder(latent,m_latent, ids_restore)  # [N, L, p*p*3]
         t_loss,r_loss = self.forward_loss_t_r(resnet_latent, pred_r,pred_t, mask)
-        return t_loss,r_loss,k
+        return t_loss,r_loss,k,feat
 
 
     def forward(self, imgs0, imgs1,mask_ratio=0.75):
@@ -419,14 +432,16 @@ class MaskedAutoencoderViT(nn.Module):
             resnet_latent=resnet_latent.permute(0,2,3,1)
             n,w,h,d=resnet_latent.size()
             resnet_latent=resnet_latent.reshape(shape=(-1,w*h,d))
-        t_loss,r_loss,k = self.MAE(imgs0, mask_ratio, resnet_latent)
+        t_loss,r_loss,k,imgs0_feat = self.MAE(imgs0, mask_ratio, resnet_latent)
 
         with torch.no_grad():
             self._momentum_update()
-            q=self.forward_encoder_m(imgs1)
+            q,_=self.forward_encoder_m(imgs1)
+            _,imgs0_feat_m=self.forward_encoder_m(imgs0)
         cl_loss=self.contrastive_loss(q, k)
-        loss = t_loss + r_loss + cl_loss
-        return loss, t_loss , r_loss ,cl_loss
+        re_loss=self.forward_loss_feat(imgs0_feat, imgs0_feat_m)
+        loss = t_loss + r_loss + cl_loss + re_loss*0.1
+        return loss, t_loss , r_loss ,cl_loss, re_loss
 
 
 def mae_vit_base_patch16_dec512d8b(**kwargs):
