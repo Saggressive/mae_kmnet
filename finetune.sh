@@ -5,21 +5,21 @@ export NCCL_SOCKET_IFNAME=eth
 export NCCL_IB_HCA=mlx5
 
 node_rank=$1
-name=pretrain100_res50_cder_cmae_re
+name=debug/ft0
 all_dir=/nlp_group/wuxing/suzhenpeng/mae_resnet/output_dir/${name}
 mkdir ${all_dir}
 
 
-nohup python -m torch.distributed.launch --nnodes=4 --master_addr=10.116.150.13 --node_rank=${node_rank}  --nproc_per_node=8   --master_port 23332  \
+nohup python -m torch.distributed.launch --nnodes=1 --master_addr=10.116.157.19 --node_rank=${node_rank}  --nproc_per_node=8   --master_port 23332  \
     --use_env main_finetune.py  \
-    --finetune output_dir/resnet_pretrain_100_beta1_resdd2_res50_cder_cmae_re/checkpoint-99.pth \
+    --finetune output_dir/resnet_pretrain_100_beta1_res50_cmae_re/checkpoint-40.pth \
     --output_dir ${all_dir} \
     --log_dir ${all_dir} \
     --accum_iter 1 \
-    --batch_size 32 \
+    --batch_size 128 \
     --model vit_base_patch16 \
     --epochs 100 \
     --blr 5e-4 --layer_decay 0.65 \
     --weight_decay 0.05 --drop_path 0.1 --reprob 0.25 --mixup 0.8 --cutmix 1.0 \
     --data_path /share/a100/vig_pytorch/imagenet-2012 \
-    >${all_dir}/${name}_${node_rank}.log 2>&1 &
+    >${all_dir}/${node_rank}.log 2>&1 &

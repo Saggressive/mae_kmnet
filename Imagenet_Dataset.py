@@ -20,7 +20,7 @@ class Imagenet_Dataset(Dataset):
             transforms.RandomResizedCrop(256, scale=(0.2, 1.0), interpolation=3),  # 3 is bicubic
             transforms.RandomHorizontalFlip()])
         self.transform_target = transforms.Compose([
-            transforms.RandomApply([transforms.ColorJitter(0.4, 0.4, 0.2, 0.1)], p=0.8),
+            transforms.RandomApply([transforms.ColorJitter(0.2, 0.2, 0.1, 0.05)], p=0.8),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
