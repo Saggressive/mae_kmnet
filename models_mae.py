@@ -17,7 +17,7 @@ import torch.nn as nn
 from timm.models.vision_transformer import PatchEmbed, Block
 
 from util.pos_embed import get_2d_sincos_pos_embed
-from resnet import resnet101,resnet50
+import clip
 
 
 
@@ -57,20 +57,20 @@ class MaskedAutoencoderViT(nn.Module):
 
         self.decoder_blocks = nn.ModuleList([
             Block(decoder_embed_dim, decoder_num_heads, mlp_ratio, qkv_bias=True, qk_scale=None, norm_layer=norm_layer)
-            for i in range(2)])
+            for i in range(6)])
 
-        self.decoder_blocks_resnet = nn.ModuleList([
+        self.decoder_blocks_clip = nn.ModuleList([
             Block(decoder_embed_dim, decoder_num_heads, mlp_ratio, qkv_bias=True, qk_scale=None, norm_layer=norm_layer)
             for i in range(2)])
 
         self.decoder_norm = norm_layer(decoder_embed_dim)
-        self.decoder_pred = nn.Linear(decoder_embed_dim,1024, bias=True) # decoder to patch
-        self.decoder_norm_resnet = norm_layer(decoder_embed_dim)
-        self.decoder_pred_resnet = nn.Linear(decoder_embed_dim, 1024, bias=True)
+        self.decoder_pred = nn.Linear(decoder_embed_dim, patch_size**2 * in_chans, bias=True) # decoder to patch
+        self.decoder_norm_clip = norm_layer(decoder_embed_dim)
+        self.decoder_pred_clip = nn.Linear(decoder_embed_dim, 768, bias=True)
         # --------------------------------------------------------------------------
     
         self.norm_pix_loss = norm_pix_loss
-        self.resnet50=resnet50(pretrained=True)
+        self.clip, self.preprocess = clip.load("ViT-B/16")
         self.initialize_weights()
 
     def initialize_weights(self):
@@ -186,8 +186,14 @@ class MaskedAutoencoderViT(nn.Module):
         middle_x = self.middle_norm(middle_x)
         return x, middle_x,mask, ids_restore
 
+        # for blk_i,blk in enumerate(self.blocks):
+        #     x = blk(x)
 
-    def forward_decoder_t(self,x):
+        # x = self.norm(x)
+        # return x, x.clone(),mask, ids_restore
+
+
+    def forward_decoder_pixel(self,x):
         # apply Transformer blocks
         for blk in self.decoder_blocks:
             x = blk(x)
@@ -201,19 +207,35 @@ class MaskedAutoencoderViT(nn.Module):
 
         return x
 
-    def forward_decoder_r(self,x):
+    def forward_decoder_clip(self,x):
         # apply Transformer blocks
-        for blk in self.decoder_blocks_resnet:
+        for blk in self.decoder_blocks_clip:
             x = blk(x)
-        x = self.decoder_norm_resnet(x)
+        x = self.decoder_norm_clip(x)
 
         # predictor projection
-        x = self.decoder_pred_resnet(x)
+        x = self.decoder_pred_clip(x)
 
         # remove cls token
         x = x[:, 1:, :]
 
         return x
+
+    def forward_decoder_clip_main(self, x,ids_restore):
+        # embed tokens
+        x = self.decoder_embed(x)
+        # append mask tokens to sequence
+        mask_tokens = self.mask_token.repeat(x.shape[0], ids_restore.shape[1] + 1 - x.shape[1], 1)
+        x_ = torch.cat([x[:, 1:, :], mask_tokens], dim=1)  # no cls token
+        x_ = torch.gather(x_, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, x.shape[2]))  # unshuffle
+        x = torch.cat([x[:, :1, :], x_], dim=1)  # append cls token
+
+        # add pos embed
+        x = x + self.decoder_pos_embed
+
+        clip_pred=self.forward_decoder_clip(x)
+
+        return clip_pred
 
     def forward_decoder(self, x, m_x,ids_restore):
         # embed tokens
@@ -234,85 +256,71 @@ class MaskedAutoencoderViT(nn.Module):
         x = x + self.decoder_pos_embed
         m_x = m_x + self.decoder_pos_embed
 
-        t=self.forward_decoder_t(m_x)
-        r=self.forward_decoder_r(x)
+        clip_pred=self.forward_decoder_clip(x)
+        pixel_pred=self.forward_decoder_pixel(m_x)
 
-        return t,r
+        return clip_pred,pixel_pred
 
-
-    def forward_loss_t(self, imgs, pred, mask):
+    def forward_loss_clip(self, clip_target, clip_pred,mask):
         """
         imgs: [N, 3, H, W]
         pred: [N, L, p*p*3]
         mask: [N, L], 0 is keep, 1 is remove, 
         """
-        target = self.patchify(imgs)
-        if self.norm_pix_loss:
-            mean = target.mean(dim=-1, keepdim=True)
-            var = target.var(dim=-1, keepdim=True)
-            target = (target - mean) / (var + 1.e-6)**.5
 
-        loss = (pred - target) ** 2
-        loss = loss.mean(dim=-1)  # [N, L], mean loss per patch
+        clip_target=clip_target[:,1:,:]
+        clip_mean=clip_target.mean(dim=-1,keepdim=True)
+        clip_var = clip_target.var(dim=-1, keepdim=True)
+        clip_target = (clip_target - clip_mean) / (clip_var + 1.e-6)**.5
 
-        loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
-        return loss
+        clip_loss = (clip_target - clip_pred) ** 2
+        clip_loss = clip_loss.mean(dim=-1)  # [N, L], mean loss per patch
+        clip_loss = (clip_loss * mask).sum() / mask.sum()  # mean loss on removed patches
 
-    def forward_loss_r(self, target, pred, mask):
+
+        return clip_loss
+
+    def forward_loss(self, clip_target,pixel_target, clip_pred, pixel_pred,mask):
         """
         imgs: [N, 3, H, W]
         pred: [N, L, p*p*3]
         mask: [N, L], 0 is keep, 1 is remove, 
         """
-        n,l,d=target.size()
-        target=target.reshape(n,-1)
-        mean=target.mean(dim=0,keepdim=True)
-        var = target.var(dim=0, keepdim=True)
-        target = (target - mean) / (var + 1.e-6)**.5
-        target=target.reshape(n,l,d)
+        pixel_target = self.patchify(pixel_target)
+        pixel_mean = pixel_target.mean(dim=-1, keepdim=True)
+        pixel_var = pixel_target.var(dim=-1, keepdim=True)
+        pixel_target = (pixel_target - pixel_mean) / (pixel_var + 1.e-6)**.5
 
-        loss = (pred - target) ** 2
-        loss = loss.mean(dim=-1)  # [N, L], mean loss per patch
+        clip_target=clip_target[:,1:,:]
+        clip_mean=clip_target.mean(dim=-1,keepdim=True)
+        clip_var = clip_target.var(dim=-1, keepdim=True)
+        clip_target = (clip_target - clip_mean) / (clip_var + 1.e-6)**.5
 
-        loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
-        return loss
+        clip_loss = (clip_target - clip_pred) ** 2
+        clip_loss = clip_loss.mean(dim=-1)  # [N, L], mean loss per patch
+        clip_loss = (clip_loss * mask).sum() / mask.sum()  # mean loss on removed patches
 
-    def forward_loss_t_r(self, target, pred1, pred2,mask):
-        """
-        imgs: [N, 3, H, W]
-        pred: [N, L, p*p*3]
-        mask: [N, L], 0 is keep, 1 is remove, 
-        """
-        n,l,d=target.size()
-        target=target.reshape(n,-1)
-        mean=target.mean(dim=0,keepdim=True)
-        var = target.var(dim=0, keepdim=True)
-        target = (target - mean) / (var + 1.e-6)**.5
-        target=target.reshape(n,l,d)
+        pixel_loss = (pixel_target - pixel_pred) ** 2
+        pixel_loss = pixel_loss.mean(dim=-1)  # [N, L], mean loss per patch
+        pixel_loss = (pixel_loss* mask).sum() / mask.sum()  # mean loss on removed patches
 
-        loss1 = (pred1 - target) ** 2
-        loss1 = loss1.mean(dim=-1)  # [N, L], mean loss per patch
-        loss1 = (loss1 * mask).sum() / mask.sum()  # mean loss on removed patches
-
-        loss2 = (pred2 - target) ** 2
-        loss2 = loss2.mean(dim=-1)  # [N, L], mean loss per patch
-        loss2 = (loss2 * mask).sum() / mask.sum()  # mean loss on removed patches
-
-        return loss1,loss2
+        return clip_loss , pixel_loss
 
     def forward(self, imgs, mask_ratio=0.75):
         with torch.no_grad():
-            resnet_latent=self.resnet50(imgs)
-            resnet_latent=resnet_latent.detach()
-            resnet_latent=resnet_latent.permute(0,2,3,1)
-            n,w,h,d=resnet_latent.size()
-            resnet_latent=resnet_latent.reshape(shape=(-1,w*h,d))
+            _,clip_latent=self.clip.encode_image(imgs)
+            clip_latent=clip_latent.detach()
 
         latent,m_latent, mask, ids_restore = self.forward_encoder(imgs, mask_ratio)
-        pred_t,pred_r = self.forward_decoder(latent,m_latent, ids_restore)  # [N, L, p*p*3]
-        t_loss,r_loss = self.forward_loss_t_r(resnet_latent, pred_r,pred_t, mask)
-        loss = t_loss + r_loss
-        return loss, t_loss , r_loss
+        clip_pred,pixel_pred = self.forward_decoder(latent,m_latent, ids_restore)  # [N, L, p*p*3]
+        clip_loss,pixel_loss = self.forward_loss(clip_latent, imgs,clip_pred,pixel_pred, mask)
+        loss = clip_loss + 0.5*pixel_loss
+        return loss, clip_loss , pixel_loss
+
+        # clip_pred= self.forward_decoder_clip_main(latent,ids_restore)  # [N, L, p*p*3]
+        # clip_loss= self.forward_loss_clip(clip_latent, clip_pred, mask)
+        # loss = clip_loss 
+        # return loss, clip_loss , torch.tensor(0,dtype=torch.float16)
 
 
 def mae_vit_base_patch16_dec512d8b(**kwargs):

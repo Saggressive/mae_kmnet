@@ -45,11 +45,11 @@ def train_one_epoch(model: torch.nn.Module,
         samples = samples.to(device, non_blocking=True)
 
         with torch.cuda.amp.autocast():
-            loss, t_loss, r_loss = model(samples, mask_ratio=args.mask_ratio)
+            loss, clip_loss, pixel_loss = model(samples, mask_ratio=args.mask_ratio)
 
         loss_value = loss.item()
-        t_loss_value=t_loss.item()
-        r_loss_value=r_loss.item()
+        clip_loss_value=clip_loss.item()
+        pixel_loss_value=pixel_loss.item()
 
         if not math.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
@@ -64,23 +64,23 @@ def train_one_epoch(model: torch.nn.Module,
         torch.cuda.synchronize()
 
         metric_logger.update(loss=loss_value)
-        metric_logger.update(t_loss=t_loss_value)
-        metric_logger.update(r_loss=r_loss_value)
+        metric_logger.update(clip_loss=clip_loss_value)
+        metric_logger.update(pixel_loss=pixel_loss_value)
 
         lr = optimizer.param_groups[0]["lr"]
         metric_logger.update(lr=lr)
 
         loss_value_reduce = misc.all_reduce_mean(loss_value)
-        t_loss_value_reduce= misc.all_reduce_mean(t_loss_value)
-        r_loss_value_reduce= misc.all_reduce_mean(r_loss_value)
+        clip_loss_value_reduce= misc.all_reduce_mean(clip_loss_value)
+        pixel_loss_value_reduce= misc.all_reduce_mean(pixel_loss_value)
         if log_writer is not None and (data_iter_step + 1) % accum_iter == 0:
             """ We use epoch_1000x as the x-axis in tensorboard.
             This calibrates different curves when batch size changes.
             """
             epoch_1000x = int((data_iter_step / len(data_loader) + epoch) * 1000)
             log_writer.add_scalar('train_loss', loss_value_reduce, epoch_1000x)
-            log_writer.add_scalar('t_loss', t_loss_value_reduce, epoch_1000x)
-            log_writer.add_scalar('r_loss', r_loss_value_reduce, epoch_1000x)
+            log_writer.add_scalar('clip_loss', clip_loss_value_reduce, epoch_1000x)
+            log_writer.add_scalar('pixel_loss', pixel_loss_value_reduce, epoch_1000x)
             log_writer.add_scalar('lr', lr, epoch_1000x)
 
 
