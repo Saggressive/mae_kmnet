@@ -195,7 +195,7 @@ class MaskedAutoencoderViT(nn.Module):
         x = self.decoder_pred(x)
 
         # remove cls token
-        x = x[:, 2:, :]
+        x = x[:, 1:, :]
 
         return x
 
@@ -243,7 +243,29 @@ class MaskedAutoencoderViT(nn.Module):
 
         return last,mid
 
+    def forward_decoder_new(self, x, ids_restore,ids_keep,ids_res):
+        # embed tokens
+        x = self.decoder_embed(x)
+    
+        # append mask tokens to sequence
+        mask_tokens = self.mask_token.repeat(x.shape[0], ids_restore.shape[1] + 1 - x.shape[1], 1)
+        x_ = torch.cat([x[:, 1:, :], mask_tokens], dim=1)  # no cls token
+        x_ = torch.gather(x_, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, x.shape[2]))  # unshuffle
+        x = torch.cat([x[:, :1, :], x_], dim=1)  # append cls token
 
+
+        # add pos embed
+        x = x + self.decoder_pos_embed
+        m_x =x.clone()
+        x_cls,x=x[:,:1,:],x[:,1:,:]
+        x_masked = torch.gather(x, dim=1, index=ids_res.unsqueeze(-1).repeat(1, 1, x.shape[2]))
+        x=torch.cat([x_cls, x_masked],dim=1)
+
+
+        last=self.forward_decoder_last(x)
+        mid=self.forward_decoder_mid(m_x)
+
+        return last,mid
 
     def forward_loss_t_r(self, target, pred1, pred2,ids_res,mask):
         """
@@ -277,7 +299,8 @@ class MaskedAutoencoderViT(nn.Module):
             resnet_latent=resnet_latent.reshape(shape=(-1,w*h,d))
 
         latent,m_latent, mask, ids_restore,ids_keep, ids_res = self.forward_encoder(imgs, mask_ratio)
-        pred_last,pred_mid = self.forward_decoder(latent,m_latent, ids_restore,ids_keep,ids_res)  # [N, L, p*p*3]
+        # pred_last,pred_mid = self.forward_decoder(latent,m_latent, ids_restore,ids_keep,ids_res)  # [N, L, p*p*3]
+        pred_last,pred_mid = self.forward_decoder_new(latent,ids_restore,ids_keep,ids_res)
         t_loss,r_loss = self.forward_loss_t_r(resnet_latent, pred_last,pred_mid,ids_res, mask)
         loss = t_loss + r_loss
         return loss, t_loss , r_loss
