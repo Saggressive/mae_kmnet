@@ -146,6 +146,7 @@ class MaskedAutoencoderViT(nn.Module):
 
         # keep the first subset
         ids_keep = ids_shuffle[:, :len_keep]
+        ids_res = ids_shuffle[:,len_keep:]
         x_masked = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, D))
 
         # generate the binary mask: 0 is keep, 1 is remove
@@ -154,7 +155,7 @@ class MaskedAutoencoderViT(nn.Module):
         # unshuffle to get the binary mask
         mask = torch.gather(mask, dim=1, index=ids_restore)
 
-        return x_masked, mask, ids_restore
+        return x_masked, mask, ids_restore,ids_keep,ids_res
 
     def forward_encoder(self, x, mask_ratio):
         # embed patches
@@ -164,7 +165,7 @@ class MaskedAutoencoderViT(nn.Module):
         x = x + self.pos_embed[:, 1:, :]
 
         # masking: length -> length * mask_ratio
-        x, mask, ids_restore = self.random_masking(x, mask_ratio)
+        x, mask, ids_restore,ids_keep,ids_res = self.random_masking(x, mask_ratio)
 
         # append cls token
         cls_token = self.cls_token + self.pos_embed[:, :1, :]
@@ -181,7 +182,7 @@ class MaskedAutoencoderViT(nn.Module):
         middle_x=torch.cat([cls_late,h_early],dim=1)
         x = self.norm(x)
         middle_x = self.middle_norm(middle_x)
-        return x, middle_x,mask, ids_restore
+        return x, middle_x,mask, ids_restore,ids_keep,ids_res
 
 
     def forward_decoder_last(self,x):
@@ -194,7 +195,7 @@ class MaskedAutoencoderViT(nn.Module):
         x = self.decoder_pred(x)
 
         # remove cls token
-        x = x[:, 1:, :]
+        x = x[:, 2:, :]
 
         return x
 
@@ -212,7 +213,7 @@ class MaskedAutoencoderViT(nn.Module):
 
         return x
 
-    def forward_decoder(self, x, m_x,ids_restore):
+    def forward_decoder(self, x, m_x,ids_restore,ids_keep,ids_res):
         # embed tokens
         x = self.decoder_embed(x)
         m_x = self.decoder_embed(m_x)
@@ -230,6 +231,13 @@ class MaskedAutoencoderViT(nn.Module):
         x = x + self.decoder_pos_embed
         m_x = m_x + self.decoder_pos_embed
 
+        x_cls,x=x[:,:1,:],x[:,1:,:]
+        x_visible= torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, x.shape[2]))
+        x_masked = torch.gather(x, dim=1, index=ids_res.unsqueeze(-1).repeat(1, 1, x.shape[2]))
+        x_visible_mean=x_visible.mean(dim=1,keepdim=True)
+        x=torch.cat([x_cls,x_visible_mean,x_masked],dim=1)
+
+
         last=self.forward_decoder_last(x)
         mid=self.forward_decoder_mid(m_x)
 
@@ -237,7 +245,7 @@ class MaskedAutoencoderViT(nn.Module):
 
 
 
-    def forward_loss_t_r(self, target, pred1, pred2,mask):
+    def forward_loss_t_r(self, target, pred1, pred2,ids_res,mask):
         """
         imgs: [N, 3, H, W]
         pred: [N, L, p*p*3]
@@ -250,9 +258,9 @@ class MaskedAutoencoderViT(nn.Module):
         target = (target - mean) / (var + 1.e-6)**.5
         target=target.reshape(n,l,d)
 
-        loss1 = (pred1 - target) ** 2
-        loss1 = loss1.mean(dim=-1)  # [N, L], mean loss per patch
-        loss1 = (loss1 * mask).sum() / mask.sum()  # mean loss on removed patches
+        target_res = torch.gather(target, dim=1, index=ids_res.unsqueeze(-1).repeat(1, 1, target.shape[2]))
+        loss1 = (pred1 - target_res) ** 2
+        loss1 = loss1.mean()  # [N, L], mean loss per patch
 
         loss2 = (pred2 - target) ** 2
         loss2 = loss2.mean(dim=-1)  # [N, L], mean loss per patch
@@ -268,9 +276,9 @@ class MaskedAutoencoderViT(nn.Module):
             n,w,h,d=resnet_latent.size()
             resnet_latent=resnet_latent.reshape(shape=(-1,w*h,d))
 
-        latent,m_latent, mask, ids_restore = self.forward_encoder(imgs, mask_ratio)
-        pred_last,pred_mid = self.forward_decoder(latent,m_latent, ids_restore)  # [N, L, p*p*3]
-        t_loss,r_loss = self.forward_loss_t_r(resnet_latent, pred_last,pred_mid, mask)
+        latent,m_latent, mask, ids_restore,ids_keep, ids_res = self.forward_encoder(imgs, mask_ratio)
+        pred_last,pred_mid = self.forward_decoder(latent,m_latent, ids_restore,ids_keep,ids_res)  # [N, L, p*p*3]
+        t_loss,r_loss = self.forward_loss_t_r(resnet_latent, pred_last,pred_mid,ids_res, mask)
         loss = t_loss + r_loss
         return loss, t_loss , r_loss
 
