@@ -311,16 +311,16 @@ class MaskedAutoencoderViT(nn.Module):
             _,clip_latent=self.clip.encode_image(imgs)
             clip_latent=clip_latent.detach()
 
-        latent,m_latent, mask, ids_restore = self.forward_encoder(imgs, mask_ratio)
-        clip_pred,pixel_pred = self.forward_decoder(latent,m_latent, ids_restore)  # [N, L, p*p*3]
-        clip_loss,pixel_loss = self.forward_loss(clip_latent, imgs,clip_pred,pixel_pred, mask)
-        loss = clip_loss + 0.5*pixel_loss
-        return loss, clip_loss , pixel_loss
+        # latent,m_latent, mask, ids_restore = self.forward_encoder(imgs, mask_ratio)
+        # clip_pred,pixel_pred = self.forward_decoder(latent,m_latent, ids_restore)  # [N, L, p*p*3]
+        # clip_loss,pixel_loss = self.forward_loss(clip_latent, imgs,clip_pred,pixel_pred, mask)
+        # loss = clip_loss + 0.5*pixel_loss
+        # return loss, clip_loss , pixel_loss
 
-        # clip_pred= self.forward_decoder_clip_main(latent,ids_restore)  # [N, L, p*p*3]
-        # clip_loss= self.forward_loss_clip(clip_latent, clip_pred, mask)
-        # loss = clip_loss 
-        # return loss, clip_loss , torch.tensor(0,dtype=torch.float16)
+        clip_pred= self.forward_decoder_clip_main(latent,ids_restore)  # [N, L, p*p*3]
+        clip_loss= self.forward_loss_clip(clip_latent, clip_pred, mask)
+        loss = clip_loss 
+        return loss, clip_loss , torch.tensor(0,dtype=torch.float16)
 
 
 def mae_vit_base_patch16_dec512d8b(**kwargs):
