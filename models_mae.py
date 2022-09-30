@@ -18,7 +18,7 @@ from timm.models.vision_transformer import PatchEmbed, Block
 
 from util.pos_embed import get_2d_sincos_pos_embed
 from resnet import resnet101,resnet50
-
+import torch.nn.functional as F
 
 
 class MaskedAutoencoderViT(nn.Module):
@@ -47,31 +47,32 @@ class MaskedAutoencoderViT(nn.Module):
 
         # --------------------------------------------------------------------------
         # MAE decoder specifics
-        self.decoder_embed = nn.Linear(embed_dim, decoder_embed_dim, bias=True)
-        self.decoder_embed_m = nn.Linear(embed_dim, decoder_embed_dim, bias=True)
+        self.decoder_embed_last = nn.Linear(embed_dim, 512, bias=True)
+        self.decoder_embed_mid = nn.Linear(embed_dim, 512, bias=True)
 
-        self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
-        self.mask_token_m = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
+        self.mask_token_last = nn.Parameter(torch.zeros(1, 1, 512))
+        self.mask_token_mid = nn.Parameter(torch.zeros(1, 1, 512))
 
-        self.decoder_pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, decoder_embed_dim), requires_grad=False)  # fixed sin-cos embedding
+        self.decoder_pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, 512), requires_grad=False)  # fixed sin-cos embedding
 
-        self.decoder_blocks = nn.ModuleList([
-            Block(decoder_embed_dim, decoder_num_heads, mlp_ratio, qkv_bias=True, qk_scale=None, norm_layer=norm_layer)
-            for i in range(decoder_depth)])
-
-        self.decoder_blocks_resnet = nn.ModuleList([
-            Block(decoder_embed_dim, decoder_num_heads, mlp_ratio, qkv_bias=True, qk_scale=None, norm_layer=norm_layer)
+        self.decoder_blocks_last = nn.ModuleList([
+            Block(512, decoder_num_heads, mlp_ratio, qkv_bias=True, qk_scale=None, norm_layer=norm_layer)
+            for i in range(2)])
+        self.decoder_blocks_mid = nn.ModuleList([
+            Block(512, decoder_num_heads, mlp_ratio, qkv_bias=True, qk_scale=None, norm_layer=norm_layer)
             for i in range(2)])
 
-        self.decoder_norm = norm_layer(decoder_embed_dim)
-        self.decoder_pred = nn.Linear(decoder_embed_dim, patch_size**2 * in_chans, bias=True) # decoder to patch
-        self.decoder_norm_resnet = norm_layer(decoder_embed_dim)
-        self.decoder_pred_resnet = nn.Linear(decoder_embed_dim, 1024, bias=True)
+        self.decoder_norm_last = norm_layer(512)
+        self.decoder_norm_mid = norm_layer(512)
+        self.decoder_pred_last = nn.Linear(512, 2048, bias=True) # decoder to patch
+        self.decoder_pred_mid = nn.Linear(512, 4096, bias=True)
+        self.last_to_mid = nn.Linear(768, 768,bias=True)
+        self.mid_to_last = nn.Linear(768, 768,bias=True)
         # --------------------------------------------------------------------------
     
         self.norm_pix_loss = norm_pix_loss
         # self.resnet50=resnet50(pretrained=True)
-        self.resnet101=resnet101(pretrained=True)
+        self.resnet50=resnet50(pretrained=True)
         self.initialize_weights()
 
     def initialize_weights(self):
@@ -89,9 +90,8 @@ class MaskedAutoencoderViT(nn.Module):
 
         # timm's trunc_normal_(std=.02) is effectively normal_(std=0.02) as cutoff is too big (2.)
         torch.nn.init.normal_(self.cls_token, std=.02)
-        torch.nn.init.normal_(self.mask_token, std=.02)
-        torch.nn.init.normal_(self.mask_token_m, std=.02)
-
+        torch.nn.init.normal_(self.mask_token_last, std=.02)
+        torch.nn.init.normal_(self.mask_token_mid, std=.02)
         # initialize nn.Linear and nn.LayerNorm
         self.apply(self._init_weights)
 
@@ -178,74 +178,54 @@ class MaskedAutoencoderViT(nn.Module):
         # apply Transformer blocks
         for blk_i,blk in enumerate(self.blocks):
             x = blk(x)
+            if blk_i==5:
+                middle_x = x.clone()
         x = self.norm(x)
+        middle_x = self.norm(middle_x)
+        return x, middle_x, mask, ids_restore
 
-        return x, mask, ids_restore
 
+    
 
-    def forward_decoder_t(self,x):
-        # apply Transformer blocks
-        for blk in self.decoder_blocks:
-            x = blk(x)
-        x = self.decoder_norm(x)
-
-        # predictor projection
-        x = self.decoder_pred(x)
-
-        # remove cls token
-        x = x[:, 1:, :]
-
-        return x
-
-    def forward_decoder_r(self,x):
-        # apply Transformer blocks
-        for blk in self.decoder_blocks_resnet:
-            x = blk(x)
-        x = self.decoder_norm_resnet(x)
-
-        # predictor projection
-        x = self.decoder_pred_resnet(x)
-
-        # remove cls token
-        x = x[:, 1:, :]
-
-        return x
-
-    def forward_decoder(self, x, ids_restore):
+    def forward_decoder_last(self, x, ids_restore):
         # embed tokens
-        x = self.decoder_embed(x)
-        # m_x = self.decoder_embed_m(m_x)
-        # append mask tokens to sequence
-        mask_tokens = self.mask_token.repeat(x.shape[0], ids_restore.shape[1] + 1 - x.shape[1], 1)
+        x = self.decoder_embed_last(x)
+        mask_tokens = self.mask_token_last.repeat(x.shape[0], ids_restore.shape[1] + 1 - x.shape[1], 1)
         x_ = torch.cat([x[:, 1:, :], mask_tokens], dim=1)  # no cls token
         x_ = torch.gather(x_, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, x.shape[2]))  # unshuffle
         x = torch.cat([x[:, :1, :], x_], dim=1)  # append cls token
-
         # add pos embed
         x = x + self.decoder_pos_embed
+        # apply Transformer blocks
+        for blk in self.decoder_blocks_last:
+            x = blk(x)
+        x = self.decoder_norm_last(x)
+        # predictor projection
+        x = self.decoder_pred_last(x)
+        # remove cls token
+        x = x[:, 1:, :]
+        return x
 
-        r=self.forward_decoder_r(x)
-
-        return r
 
 
-    def forward_loss_t(self, imgs, pred, mask):
-        """
-        imgs: [N, 3, H, W]
-        pred: [N, L, p*p*3]
-        mask: [N, L], 0 is keep, 1 is remove, 
-        """
-        target = self.patchify(imgs)
-        if self.norm_pix_loss:
-            mean = target.mean(dim=-1, keepdim=True)
-            var = target.var(dim=-1, keepdim=True)
-            target = (target - mean) / (var + 1.e-6)**.5
-
-        loss = (pred - target) ** 2
-        loss = loss.mean(dim=-1)  # [N, L], mean loss per patch
-
-        loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
-        return loss
+    def forward_decoder_mid(self, x, ids_restore):
+        # embed tokens
+        x = self.decoder_embed_mid(x)
+        mask_tokens = self.mask_token_mid.repeat(x.shape[0], ids_restore.shape[1] + 1 - x.shape[1], 1)
+        x_ = torch.cat([x[:, 1:, :], mask_tokens], dim=1)  # no cls token
+        x_ = torch.gather(x_, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, x.shape[2]))  # unshuffle
+        x = torch.cat([x[:, :1, :], x_], dim=1)  # append cls token
+        # add pos embed
+        x = x + self.decoder_pos_embed
+        # apply Transformer blocks
+        for blk in self.decoder_blocks_mid:
+            x = blk(x)
+        x = self.decoder_norm_mid(x)
+        # predictor projection
+        x = self.decoder_pred_mid(x)
+        # remove cls token
+        x = x[:, 1:, :]
+        return x
 
     def forward_loss_r(self, target, pred, mask):
         """
@@ -254,32 +234,51 @@ class MaskedAutoencoderViT(nn.Module):
         mask: [N, L], 0 is keep, 1 is remove, 
         """
         n,l,d=target.size()
-        target=target.reshape(n,-1)
-        mean=target.mean(dim=0,keepdim=True)
-        var = target.var(dim=0, keepdim=True)
+        mean=target.mean(dim=[0,1],keepdim=True)
+        var = target.var(dim=[0,1], keepdim=True)
         target = (target - mean) / (var + 1.e-6)**.5
         target=target.reshape(n,l,d)
 
         loss = (pred - target) ** 2
         loss = loss.mean(dim=-1)  # [N, L], mean loss per patch
 
-        loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
+        loss = (loss * mask).sum(dim=1) / mask.sum(dim=1)  # mean loss on removed patches
         return loss
 
-    def forward(self, imgs, mask_ratio=0.75):
+    def forward(self, imgs, mask_ratio=0.75 , epoch=0):
+        n,_,_,_=imgs.shape
         with torch.no_grad():
-            resnet_latent=self.resnet101(imgs)
-            resnet_latent=resnet_latent.detach()
-            resnet_latent=resnet_latent.permute(0,2,3,1)
-            n,w,h,d=resnet_latent.size()
-            resnet_latent=resnet_latent.reshape(shape=(-1,w*h,d))
+            self.resnet50.eval()
+            resnet_latent_mid,resnet_latent_last=self.resnet50(imgs)
+            resnet_latent_mid,resnet_latent_last=resnet_latent_mid.detach(),resnet_latent_last.detach()
+            resnet_latent_last = F.interpolate(resnet_latent_last, (14,14), mode="nearest")
 
-        latent,mask, ids_restore = self.forward_encoder(imgs, mask_ratio)
-        pred_r = self.forward_decoder(latent,ids_restore)  # [N, L, p*p*3]
+            Y = torch.zeros((n,4096,14,14)).to(resnet_latent_mid.device)
+            for i in range(Y.shape[2]):
+                for j in range(Y.shape[3]):
+                    k=resnet_latent_mid[:,:,4*i:(4*i+4),4*j:(4*j+4)]
+                    k=k.reshape(n,-1)
+                    Y[:, :, i, j] = k
+            resnet_latent_mid = Y
 
-        r_loss = self.forward_loss_r(resnet_latent, pred_r, mask)
+            resnet_latent_mid,resnet_latent_last=resnet_latent_mid.permute(0,2,3,1),resnet_latent_last.permute(0,2,3,1)
+            n,w,h,d=resnet_latent_mid.size()
+            resnet_latent_mid=resnet_latent_mid.reshape(shape=(-1,w*h,4096))
+            resnet_latent_last=resnet_latent_last.reshape(shape=(-1,w*h,2048))
 
-        return  r_loss
+        latent,mid_latent,mask, ids_restore = self.forward_encoder(imgs, mask_ratio)
+        pred_last= self.forward_decoder_last(latent,ids_restore)  # [N, L, p*p*3]
+        mid_latent_sigmoid = F.sigmoid(self.last_to_mid(mid_latent))
+        latent_sigmoid = F.sigmoid(self.mid_to_last(latent)) 
+        mid_latent = mid_latent * mid_latent_sigmoid + latent * latent_sigmoid
+        pred_mid= self.forward_decoder_mid(mid_latent,ids_restore)
+
+        loss_mid = self.forward_loss_r(resnet_latent_mid, pred_mid, mask)
+        loss_last = self.forward_loss_r(resnet_latent_last, pred_last, mask)
+
+        loss_mid , loss_last = loss_mid.mean() , loss_last.mean()
+        loss = loss_mid + loss_last
+        return  loss , loss_mid , loss_last
 
 def mae_vit_base_patch16_dec512d8b(**kwargs):
     model = MaskedAutoencoderViT(

@@ -1,4 +1,6 @@
 output_dir/
 imagenet
 imagenet/
+resnet_output_dir/
+clip_output_dir/
 

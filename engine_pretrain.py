@@ -45,10 +45,11 @@ def train_one_epoch(model: torch.nn.Module,
         samples = samples.to(device, non_blocking=True)
 
         with torch.cuda.amp.autocast():
-            loss = model(samples, mask_ratio=args.mask_ratio)
+            loss , r3_loss ,r4_loss = model(samples, mask_ratio=args.mask_ratio,epoch=epoch)
 
         loss_value = loss.item()
-
+        r3_loss_value = r3_loss.item()
+        r4_loss_value = r4_loss.item()
         if not math.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
             sys.exit(1)
@@ -62,17 +63,24 @@ def train_one_epoch(model: torch.nn.Module,
         torch.cuda.synchronize()
 
         metric_logger.update(loss=loss_value)
+        metric_logger.update(r3_loss=r3_loss_value)
+        metric_logger.update(r4_loss=r4_loss_value)
 
         lr = optimizer.param_groups[0]["lr"]
         metric_logger.update(lr=lr)
 
         loss_value_reduce = misc.all_reduce_mean(loss_value)
+        r3_loss_value_reduce = misc.all_reduce_mean(r3_loss_value)
+        r4_loss_value_reduce = misc.all_reduce_mean(r4_loss_value)
+        
         if log_writer is not None and (data_iter_step + 1) % accum_iter == 0:
             """ We use epoch_1000x as the x-axis in tensorboard.
             This calibrates different curves when batch size changes.
             """
             epoch_1000x = int((data_iter_step / len(data_loader) + epoch) * 1000)
             log_writer.add_scalar('train_loss', loss_value_reduce, epoch_1000x)
+            log_writer.add_scalar('r3_train_loss', r3_loss_value_reduce, epoch_1000x)
+            log_writer.add_scalar('r4_train_loss', r4_loss_value_reduce, epoch_1000x)
             log_writer.add_scalar('lr', lr, epoch_1000x)
 
 

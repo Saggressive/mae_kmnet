@@ -237,12 +237,11 @@ class ResNet(nn.Module):
         x = self.relu(x)
         x = self.maxpool(x)
 
-        x,_ = self.layer1(x)
-        x,_ = self.layer2(x)
-        x,layers_x = self.layer3(x)
-        return layers_x
-        # x = self.layer4(x)
-
+        x,layers_x1 = self.layer1(x)
+        x,layers_x2 = self.layer2(x)
+        x3,layers_x3 = self.layer3(x)
+        x4,layers_x4 = self.layer4(x3)
+        return layers_x1 , layers_x4
         # x = self.avgpool(x)
         # x = torch.flatten(x, 1)
         # x = self.fc(x)
